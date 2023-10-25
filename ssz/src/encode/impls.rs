@@ -4,6 +4,7 @@ use ethereum_types::{H160, H256, U128, U256};
 use smallvec::SmallVec;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use triomphe::Arc as TArc;
 
 macro_rules! impl_encodable_for_uint {
     ($type: ident, $bit_size: expr) => {
@@ -232,6 +233,24 @@ impl<T: Encode> Encode for Option<T> {
 }
 
 impl<T: Encode> Encode for Arc<T> {
+    fn is_ssz_fixed_len() -> bool {
+        T::is_ssz_fixed_len()
+    }
+
+    fn ssz_fixed_len() -> usize {
+        T::ssz_fixed_len()
+    }
+
+    fn ssz_append(&self, buf: &mut Vec<u8>) {
+        self.as_ref().ssz_append(buf)
+    }
+
+    fn ssz_bytes_len(&self) -> usize {
+        self.as_ref().ssz_bytes_len()
+    }
+}
+
+impl<T: Encode> Encode for TArc<T> {
     fn is_ssz_fixed_len() -> bool {
         T::is_ssz_fixed_len()
     }

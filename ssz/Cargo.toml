@@ -20,6 +20,7 @@ ethereum_ssz_derive = { version = "0.5.3", path = "../ssz_derive" }
 ethereum-types = "0.14.1"
 smallvec = { version = "1.6.1", features = ["const_generics"] }
 itertools = "0.10.3"
+triomphe = "0.1.9"
 
 [features]
 arbitrary = ["ethereum-types/arbitrary"]
