@@ -340,6 +340,7 @@ fn ssz_encode_derive_struct(derive_input: &DeriveInput, struct_data: &DataStruct
     let field_fixed_len = &mut vec![];
     let field_ssz_bytes_len = &mut vec![];
     let field_encoder_append = &mut vec![];
+    let field_stream_encoder_append = &mut vec![];
 
     for (ty, ident, field_opts) in parse_ssz_fields(struct_data) {
         if field_opts.skip_serializing {
@@ -364,11 +365,24 @@ fn ssz_encode_derive_struct(derive_input: &DeriveInput, struct_data: &DataStruct
                     |buf| #module::ssz_append(&self.#ident, buf)
                 )
             });
+            field_stream_encoder_append.push(quote! {
+                encoder.append_parameterized(
+                    #module::is_ssz_fixed_len(),
+                    #module::ssz_bytes_len(&self.#ident),
+                    |buf| #module::ssz_append(&self.#ident, buf),
+                    |w| {
+                        let mut tmp = Vec::with_capacity(#module::ssz_bytes_len(&self.#ident));
+                        #module::ssz_append(&self.#ident, &mut tmp);
+                        w.write_all(&tmp)
+                    },
+                )
+            });
         } else {
             field_is_ssz_fixed_len.push(quote! { <#ty as ssz::Encode>::is_ssz_fixed_len() });
             field_fixed_len.push(quote! { <#ty as ssz::Encode>::ssz_fixed_len() });
             field_ssz_bytes_len.push(quote! { self.#ident.ssz_bytes_len() });
             field_encoder_append.push(quote! { encoder.append(&self.#ident) });
+            field_stream_encoder_append.push(quote! { encoder.append(&self.#ident) });
         }
     }
 
@@ -435,6 +449,21 @@ fn ssz_encode_derive_struct(derive_input: &DeriveInput, struct_data: &DataStruct
 
                 encoder.finalize();
             }
+
+            fn ssz_write(&self, w: &mut dyn std::io::Write) -> std::io::Result<()> {
+                let mut offset: usize = 0;
+                #(
+                    offset = offset
+                        .checked_add(#field_fixed_len)
+                        .expect("encode ssz_write offset overflow");
+                )*
+
+                let mut encoder = ssz::SszStreamEncoder::container(w, offset);
+                #(
+                    #field_stream_encoder_append;
+                )*
+                encoder.finalize()
+            }
         }
     };
     output.into()
@@ -493,6 +522,10 @@ fn ssz_encode_derive_struct_transparent(
                 fn ssz_append(&self, buf: &mut Vec<u8>) {
                     self.#field_name.ssz_append(buf)
                 }
+
+                fn ssz_write(&self, w: &mut dyn std::io::Write) -> std::io::Result<()> {
+                    self.#field_name.ssz_write(w)
+                }
             }
         }
     } else {
@@ -512,6 +545,10 @@ fn ssz_encode_derive_struct_transparent(
 
                 fn ssz_append(&self, buf: &mut Vec<u8>) {
                     self.#index.ssz_append(buf)
+                }
+
+                fn ssz_write(&self, w: &mut dyn std::io::Write) -> std::io::Result<()> {
+                    self.#index.ssz_write(w)
                 }
             }
         }
@@ -592,6 +629,14 @@ fn ssz_encode_derive_enum_transparent(
                     )*
                 }
             }
+
+            fn ssz_write(&self, w: &mut dyn std::io::Write) -> std::io::Result<()> {
+                match self {
+                    #(
+                        #patterns => inner.ssz_write(w),
+                    )*
+                }
+            }
         }
     };
     output.into()
@@ -649,6 +694,18 @@ fn ssz_encode_derive_enum_tag(derive_input: &DeriveInput, enum_data: &DataEnum) 
                             let union_selector: u8 = #union_selectors;
                             debug_assert!(union_selector <= ssz::MAX_UNION_SELECTOR);
                             buf.push(union_selector);
+                        },
+                    )*
+                }
+            }
+
+            fn ssz_write(&self, w: &mut dyn std::io::Write) -> std::io::Result<()> {
+                match self {
+                    #(
+                        #patterns => {
+                            let union_selector: u8 = #union_selectors;
+                            debug_assert!(union_selector <= ssz::MAX_UNION_SELECTOR);
+                            w.write_all(&[union_selector])
                         },
                     )*
                 }
@@ -715,6 +772,19 @@ fn ssz_encode_derive_enum_union(derive_input: &DeriveInput, enum_data: &DataEnum
                             debug_assert!(union_selector <= ssz::MAX_UNION_SELECTOR);
                             buf.push(union_selector);
                             inner.ssz_append(buf)
+                        },
+                    )*
+                }
+            }
+
+            fn ssz_write(&self, w: &mut dyn std::io::Write) -> std::io::Result<()> {
+                match self {
+                    #(
+                        #patterns => {
+                            let union_selector: u8 = #union_selectors;
+                            debug_assert!(union_selector <= ssz::MAX_UNION_SELECTOR);
+                            w.write_all(&[union_selector])?;
+                            inner.ssz_write(w)
                         },
                     )*
                 }

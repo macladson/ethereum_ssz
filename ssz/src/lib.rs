@@ -50,7 +50,7 @@ pub use decode::{
     impls::decode_list_of_variable_length_items, read_offset, split_union_bytes,
     try_from_iter::TryFromIter, Decode, DecodeError, SszDecoder, SszDecoderBuilder,
 };
-pub use encode::{encode_length, Encode, SszEncoder};
+pub use encode::{encode_length, Encode, SszEncoder, SszStreamEncoder};
 pub use union_selector::UnionSelector;
 
 /// The number of bytes used to represent an offset.

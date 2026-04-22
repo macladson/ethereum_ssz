@@ -1,6 +1,10 @@
 use super::*;
+use std::io::{self, Write};
 
 mod impls;
+mod stream_encoder;
+
+pub use stream_encoder::SszStreamEncoder;
 
 /// Provides SSZ encoding (serialization) via the `as_ssz_bytes(&self)` method.
 ///
@@ -42,6 +46,17 @@ pub trait Encode {
         self.ssz_append(&mut buf);
 
         buf
+    }
+
+    /// Encode this value as SSZ directly to a writer.
+    ///
+    /// The default implementation serializes to a `Vec<u8>` via `ssz_append` and writes it in one
+    /// shot. Types with large encoded representations should override this to stream their encoding
+    /// without needing to allocate.
+    fn ssz_write(&self, w: &mut dyn Write) -> io::Result<()> {
+        let mut buf = Vec::with_capacity(self.ssz_bytes_len());
+        self.ssz_append(&mut buf);
+        w.write_all(&buf)
     }
 }
 
@@ -192,5 +207,84 @@ mod tests {
     #[cfg(not(debug_assertions))]
     fn test_encode_length_above_max_not_debug_does_not_panic() {
         assert_eq!(&encode_length(MAX_LENGTH_VALUE + 1)[..], &[0; 4]);
+    }
+
+    /// Compare SszStreamEncoder output to SszEncoder output for the same field sequence.
+    macro_rules! assert_stream_eq {
+        ($fixed_len:expr, $($item:expr),+ $(,)?) => {{
+            let mut stream_out = Vec::new();
+            let mut stream_encoder = SszStreamEncoder::container(&mut stream_out, $fixed_len);
+            $( stream_encoder.append(&$item); )+
+            stream_encoder.finalize().unwrap();
+
+            let mut expected = Vec::new();
+            let mut encoder = SszEncoder::container(&mut expected, $fixed_len);
+            $( encoder.append(&$item); )+
+            encoder.finalize();
+
+            assert_eq!(stream_out, expected);
+        }};
+    }
+
+    #[test]
+    fn ssz_stream_encoder() {
+        let a: u64 = 42;
+        let b: u16 = 7;
+        let c: Vec<u16> = vec![1, 2, 3];
+        let d: Vec<u8> = vec![];
+
+        // Fixed-only.
+        let fixed_len = <u64 as Encode>::ssz_fixed_len() + <u16 as Encode>::ssz_fixed_len();
+        assert_stream_eq!(fixed_len, a, b);
+
+        // Mixed fixed + variable.
+        let fixed_len = <u64 as Encode>::ssz_fixed_len() + <Vec<u16> as Encode>::ssz_fixed_len();
+        assert_stream_eq!(fixed_len, a, c);
+
+        // Variable-fixed-variable interleaving, including empty vec.
+        let fixed_len = <Vec<u16> as Encode>::ssz_fixed_len()
+            + <u64 as Encode>::ssz_fixed_len()
+            + <Vec<u8> as Encode>::ssz_fixed_len();
+        assert_stream_eq!(fixed_len, c, a, d);
+    }
+
+    #[test]
+    fn ssz_write_matches_as_ssz_bytes() {
+        fn check<T: Encode>(val: &T) {
+            let mut write_buf = Vec::new();
+            val.ssz_write(&mut write_buf).unwrap();
+            assert_eq!(write_buf, val.as_ssz_bytes());
+        }
+
+        check(&0xDEADBEEFu32);
+        check(&vec![1u8, 2, 3, 4]);
+        check(&vec![vec![1u8, 2], vec![3, 4, 5]]);
+    }
+
+    #[test]
+    fn ssz_stream_encoder_parameterized() {
+        let a: u64 = 42;
+        let b: Vec<u16> = vec![1, 2, 3];
+        let fixed_len = <u64 as Encode>::ssz_fixed_len() + <Vec<u16> as Encode>::ssz_fixed_len();
+
+        let mut out = Vec::new();
+        let mut stream_encoder = SszStreamEncoder::container(&mut out, fixed_len);
+        stream_encoder.append(&a);
+        let b_ref = &b;
+        stream_encoder.append_parameterized(
+            <Vec<u16> as Encode>::is_ssz_fixed_len(),
+            b_ref.ssz_bytes_len(),
+            |buf| b_ref.ssz_append(buf),
+            |w| b_ref.ssz_write(w),
+        );
+        stream_encoder.finalize().unwrap();
+
+        let mut expected = Vec::new();
+        let mut encoder = SszEncoder::container(&mut expected, fixed_len);
+        encoder.append(&a);
+        encoder.append(&b);
+        encoder.finalize();
+
+        assert_eq!(out, expected);
     }
 }

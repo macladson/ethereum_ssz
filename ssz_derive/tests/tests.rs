@@ -315,3 +315,49 @@ fn transparent_struct_newtype_skipped_encode_only() {
         &vec![42_u8].as_ssz_bytes(),
     );
 }
+
+fn assert_ssz_write_matches<T: Encode>(item: &T) {
+    let mut write_buf = Vec::new();
+    item.ssz_write(&mut write_buf).unwrap();
+    assert_eq!(write_buf, item.as_ssz_bytes());
+}
+
+#[derive(PartialEq, Debug, Encode, Decode)]
+struct MixedStruct {
+    a: u64,
+    b: Vec<u16>,
+    #[ssz(skip_serializing, skip_deserializing)]
+    _phantom: PhantomData<u32>,
+    c: u32,
+    d: Vec<u8>,
+}
+
+#[test]
+fn ssz_write_all_derive_paths() {
+    assert_ssz_write_matches(&MixedStruct {
+        a: 99,
+        b: vec![1, 2, 3],
+        _phantom: PhantomData,
+        c: 7,
+        d: vec![0xAA, 0xBB],
+    });
+
+    assert_ssz_write_matches(&TransparentStruct::new(42));
+    assert_ssz_write_matches(&TransparentStructNewType(vec![1, 2, 3]));
+    assert_ssz_write_matches(&TwoVariableTrans::A(VariableA {
+        a: 1,
+        b: vec![2, 3],
+    }));
+    assert_ssz_write_matches(&TwoVariableUnion::B(VariableB {
+        a: vec![1, 2],
+        b: 3,
+    }));
+    assert_ssz_write_matches(&TagEnum::B);
+
+    assert_ssz_write_matches(&TwoVariableUnionStruct {
+        a: TwoVariableUnion::A(VariableA {
+            a: 255,
+            b: vec![10, 20, 30],
+        }),
+    });
+}
